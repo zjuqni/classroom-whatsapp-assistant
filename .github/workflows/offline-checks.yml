@@ -1,0 +1,29 @@
+name: Offline checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Parse Apps Script sources
+        run: node -e "const fs=require('node:fs'),vm=require('node:vm');for(const f of fs.readdirSync('apps-script').filter(x=>x.endsWith('.gs')))new vm.Script(fs.readFileSync('apps-script/'+f,'utf8'),{filename:f});"
+      - name: Check bridge syntax
+        run: |
+          node --check whatsapp-bridge/src/server.js
+          node --check whatsapp-bridge/src/mention-bot.js
+          node --check whatsapp-bridge/apply-media-hotfix.cjs
+      - name: Run isolated tests
+        working-directory: whatsapp-bridge
+        run: node --test

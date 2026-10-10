@@ -1,0 +1,23 @@
+[Unit]
+Description=Classroom WhatsApp Web bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=classroom-wa
+Group=classroom-wa
+WorkingDirectory=/opt/classroom-wa-bridge
+EnvironmentFile=/etc/classroom-wa-bridge.env
+ExecStart=/usr/bin/node /opt/classroom-wa-bridge/src/server.js
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/classroom-wa-bridge
+UMask=0077
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

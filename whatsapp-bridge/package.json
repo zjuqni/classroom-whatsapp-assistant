@@ -1,0 +1,19 @@
+{
+  "name": "classroom-assistant-whatsapp-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bridge between a Google Apps Script Classroom assistant and WhatsApp Web.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "1.34.7"
+  }
+}

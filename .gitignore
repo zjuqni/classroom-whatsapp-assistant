@@ -1,0 +1,29 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pub
+credentials*.json
+service-account*.json
+.clasp.json
+apps-script/script-properties.json
+apps-script/*.local.json
+
+# Runtime and build artifacts
+node_modules/
+data/
+.wwebjs_auth/
+.wwebjs_cache/
+whatsapp-session/
+whatsapp-qr.svg
+sent-events.json
+*.log
+npm-debug.log*
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
