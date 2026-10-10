@@ -1,5 +1,16 @@
 # Classroom WhatsApp Assistant
 
+
+## Introduction
+
+### Why this was made?
+
+This deployment template was made for students who use Google Classroom. Originally made to be send in a WhatsApp group to give this information to my classmates. I hope this can serve to help you to automate it. Every document and guide that you need is inside this repo. I hope you like it 💖.
+
+- By [zJuqni](https://zjuqni.com) [Comissions Open]
+
+## What is this?
+
 A configurable learning project that reads Google Classroom, summarizes new publications with Vertex AI, and sends notices and supported attachments to one WhatsApp group. Group members can mention the linked account to ask about publications, teachers, deadlines, or assignment explanations.
 
 This repository is a **deployment template**. It contains no real account, school timetable, group, Cloud project, server address, or personal profile. Each installation supplies private settings. Defaults use UTC, English, a 15-minute interval, no subject mappings or timetable, and the same quota for every participant.
