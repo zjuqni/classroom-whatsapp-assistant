@@ -165,3 +165,46 @@ test('Drive reports permission, size, and unsupported-format failures without fe
   assert.ok(warnings.some(warning => /exceeds the reading limit/.test(warning)));
   assert.ok(warnings.some(warning => /unsupported format/.test(warning)));
 });
+
+test('DOCX files are unzipped, extracted with XML fallback, and sent to Gemini as text', () => {
+  const s = setup({ kind: 'GENERAL', generalAnswer: 'OK' });
+  const xml = '<w:document><w:body><w:p><w:r><w:t>From a height of 20 m, calculate the final velocity.</w:t></w:r></w:p><w:p><w:r><w:t>Use g = 9.8 m/s².</w:t></w:r></w:p></w:body></w:document>';
+  let zipMime = '';
+  s.ctx.DriveApp = { getFileById: () => ({
+    getSize: () => 100,
+    getMimeType: () => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    getBlob: () => ({ getBytes: () => [1, 2, 3], getContentType: () => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', getName: () => 'Vertical Throw.docx' })
+  }) };
+  s.ctx.Utilities = { newBlob: (data, mime, name) => ({
+    getBytes: () => typeof data === 'string' ? Array.from(data, char => char.charCodeAt(0)) : data,
+    getContentType: () => mime,
+    getName: () => name
+  }) };
+  s.ctx.Utilities.unzip = blob => {
+    zipMime = blob.getContentType();
+    return [{ getName: () => 'word/document.xml', getDataAsString: () => xml }];
+  };
+  s.ctx.XmlService = { parse: () => { throw new Error('simulate XML parser failure'); } };
+  const warnings = [];
+  const parts = s.ctx.CB_assignmentFiles_([{ materials: [{ fileId: 'docx', title: 'Vertical Throw.docx' }] }], warnings, Date.now() + 10000);
+  assert.equal(zipMime, 'application/zip');
+  assert.equal(warnings.length, 0);
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].inlineData, undefined);
+  assert.match(parts[0].text, /height of 20 m/);
+  assert.match(parts[0].text, /g = 9\.8 m\/s²/);
+  const vertexParts = s.ctx.CB_vertexParts_(parts);
+  assert.equal(vertexParts.length, 1);
+  assert.equal(vertexParts[0].text, parts[0].text);
+  assert.equal(vertexParts[0].inlineData, undefined);
+});
+
+test('binary attachments retain their inline data and a separate text label', () => {
+  const s = setup({ kind: 'GENERAL', generalAnswer: 'OK' });
+  const binary = { mimeType: 'application/pdf', data: 'Ynl0ZXM=' };
+  const parts = s.ctx.CB_vertexParts_([{ inlineData: binary, text: 'Physics handout.pdf' }]);
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0].text, 'Physics handout.pdf');
+  assert.equal(parts[1].inlineData.mimeType, binary.mimeType);
+  assert.equal(parts[1].inlineData.data, binary.data);
+});

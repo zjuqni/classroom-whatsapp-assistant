@@ -305,6 +305,8 @@ function CB_assignmentFiles_(posts, warnings, deadline) {
   posts.forEach(post => (post.materials || []).forEach(material => {
     if (!material.fileId || seen[material.fileId] || parts.length >= 3) return;
     seen[material.fileId] = true;
+    let stage = "read Drive file";
+    let mime = "";
     try {
       NF_comprobarTiempo_(deadline);
       const file = DriveApp.getFileById(material.fileId);
@@ -313,8 +315,10 @@ function CB_assignmentFiles_(posts, warnings, deadline) {
         return;
       }
       let blob = file.getBlob();
-      let mime = String(file.getMimeType() || blob.getContentType() || "").toLowerCase();
-      if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      mime = String(file.getMimeType() || blob.getContentType() || "").toLowerCase();
+      const fileName = String(material.title || (file.getName && file.getName()) || "").toLowerCase();
+      if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || (mime.indexOf("google-apps.") < 0 && /\.docx$/.test(fileName))) {
+        stage = "extract DOCX text";
         const extracted = CB_docxText_(blob);
         if (!extracted) throw new Error("The document contains no readable text.");
         const extractedBytes = Utilities.newBlob(extracted, "text/plain").getBytes();
@@ -323,10 +327,11 @@ function CB_assignmentFiles_(posts, warnings, deadline) {
           return;
         }
         totalBytes += extractedBytes.length;
-        parts.push({ inlineData: { mimeType: "text/plain", data: Utilities.base64Encode(extracted, Utilities.Charset.UTF_8) }, text: "Text extracted from " + material.title });
+        parts.push({ text: "Text extracted from " + String(material.title || fileName).slice(0, 160) + ":\n" + extracted });
         return;
       }
       if (mime.indexOf("google-apps.") >= 0) {
+        stage = "convert Google document";
         blob = file.getAs(MimeType.PDF);
         mime = "application/pdf";
       }
@@ -340,14 +345,20 @@ function CB_assignmentFiles_(posts, warnings, deadline) {
         return;
       }
       totalBytes += bytes.length;
+      stage = "prepare file for Gemini";
       parts.push({
         inlineData: { mimeType: mime, data: Utilities.base64Encode(bytes) },
         text: "Assignment file: " + String(material.title || file.getName()).slice(0, 160)
       });
     } catch (error) {
       const detail = CB_norm_(error && error.message || "");
+      if (typeof console !== "undefined" && console.error) {
+        console.error("[ClassroomBot] Attachment read failed; stage=" + stage + "; mime=" + mime + "; error=" + String(error && error.message || error).slice(0, 240));
+      }
       if (/permission|access denied|not authorized|insufficient|not found|does not exist/.test(detail)) {
         warnings.push("Could not read " + material.title + " because Drive did not make it available to the Apps Script account. Check the file's Classroom/Drive permissions.");
+      } else if (stage === "extract DOCX text") {
+        warnings.push("Could not extract text from " + material.title + " in the Word file. The exercise statements were not included; check that the DOCX opens in Drive.");
       } else {
         warnings.push("Could not read " + material.title + " because of a read error or unsupported format. The Classroom link is still available.");
       }
@@ -361,21 +372,50 @@ function CB_assignmentFiles_(posts, warnings, deadline) {
 }
 
 function CB_docxText_(blob) {
-  const entries = Utilities.unzip(blob);
-  const documentXml = entries.find(entry => /(^|\/)word\/document\.xml$/.test(entry.getName()));
+  const zipBlob = Utilities.newBlob(blob.getBytes(), "application/zip", blob.getName() || "attachment.docx");
+  const entries = Utilities.unzip(zipBlob);
+  const documentXml = entries.find(entry => String(entry.getName()).replace(/\\/g, "/").toLowerCase().replace(/^\/+/, "").endsWith("word/document.xml"));
   if (!documentXml) return "";
-  const root = XmlService.parse(documentXml.getDataAsString("UTF-8")).getRootElement();
-  const output = [];
-  function visit(element) {
-    const name = element.getName();
-    if (name === "t") { output.push(element.getText()); return; }
-    if (name === "tab") { output.push("\t"); return; }
-    if (name === "br" || name === "cr") { output.push("\n"); return; }
-    element.getChildren().forEach(visit);
-    if (name === "p") output.push("\n");
+  const xml = documentXml.getDataAsString("UTF-8");
+  let extracted = "";
+  try {
+    const root = XmlService.parse(xml).getRootElement();
+    const output = [];
+    function visit(element) {
+      const name = element.getName();
+      if (name === "t") { output.push(element.getText()); return; }
+      if (name === "tab") { output.push("\t"); return; }
+      if (name === "br" || name === "cr") { output.push("\n"); return; }
+      element.getChildren().forEach(visit);
+      if (name === "p") output.push("\n");
+    }
+    visit(root);
+    extracted = output.join("");
+  } catch (error) {
+    extracted = CB_docxXmlFallback_(xml);
   }
-  visit(root);
-  return output.join("").replace(/[ \t]+\n/g, "\n").trim().slice(0, 50000);
+  if (!extracted.trim()) extracted = CB_docxXmlFallback_(xml);
+  return extracted.replace(/[ \t]+\n/g, "\n").trim().slice(0, 50000);
+}
+
+function CB_docxXmlFallback_(xml) {
+  const paragraphs = [];
+  const source = String(xml || "");
+  const paragraphPattern = /<((?:[A-Za-z0-9_.-]+:)?)p\b[^>]*>([\s\S]*?)<\/\1p\s*>/gi;
+  let match;
+  while ((match = paragraphPattern.exec(source)) !== null) {
+    let paragraph = match[2]
+      .replace(/<((?:[A-Za-z0-9_.-]+:)?)tab\b[^>]*\/?\s*>/gi, "\t")
+      .replace(/<((?:[A-Za-z0-9_.-]+:)?)(?:br|cr)\b[^>]*\/?\s*>/gi, "\n")
+      .replace(/<((?:[A-Za-z0-9_.-]+:)?)t\b[^>]*>([\s\S]*?)<\/\1t\s*>/gi, "$2")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, "\"").replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, function (_, number) { return String.fromCodePoint(Number(number)); })
+      .replace(/&#x([0-9a-f]+);/gi, function (_, hex) { return String.fromCodePoint(parseInt(hex, 16)); });
+    if (paragraph) paragraphs.push(paragraph);
+  }
+  return paragraphs.join("\n");
 }
 
 function CB_final_(question, context, posts, fileParts) {
@@ -407,7 +447,7 @@ function CB_vertex_(instructions, value, schema, inlineParts) {
     + "/locations/" + encodeURIComponent(NOTIFICADOR_CONFIG.plantilla.vertexLocation) + "/publishers/google/models/" + encodeURIComponent(NOTIFICADOR_CONFIG.modelo) + ":generateContent";
   const response = UrlFetchApp.fetch(url, {
     method: "post", contentType: "application/json", headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
-    payload: JSON.stringify({ systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: "user", parts: [{ text: JSON.stringify(value) }].concat((inlineParts || []).flatMap(p => [{ inlineData: p.inlineData }, { text: p.text }])) }],
+    payload: JSON.stringify({ systemInstruction: { parts: [{ text: instructions }] }, contents: [{ role: "user", parts: [{ text: JSON.stringify(value) }].concat(CB_vertexParts_(inlineParts)) }],
       generationConfig: { responseMimeType: "application/json", responseSchema: schema, maxOutputTokens: 8192, temperature: 0.2 } }), muteHttpExceptions: true
   });
   const code = response.getResponseCode();
@@ -416,6 +456,15 @@ function CB_vertex_(instructions, value, schema, inlineParts) {
   const text = candidate && candidate.content && (candidate.content.parts || []).filter(p => !p.thought).map(p => p.text || "").join("").trim();
   if (!text) throw new Error("Vertex returned an empty response.");
   return JSON.parse(text);
+}
+
+function CB_vertexParts_(inlineParts) {
+  return (inlineParts || []).flatMap(part => {
+    const result = [];
+    if (part.text) result.push({ text: String(part.text) });
+    if (part.inlineData) result.push({ inlineData: part.inlineData });
+    return result;
+  });
 }
 
 function CB_teachers_(courseId, deadline) {
