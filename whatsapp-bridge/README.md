@@ -25,6 +25,8 @@ Privately copy the generated value into `.env` as `BRIDGE_TOKEN` and Apps Script
 | `WA_MESSAGES_PER_HOUR` | Positive integer, default `10`, applied equally to everyone. |
 | `MAX_BODY_BYTES` | Optional HTTP body limit; default `35000000` bytes. |
 
+Mention replies use one shared group memory for direct requests addressed to the bot and the replies it sends. The bridge stores sender ID, visible display name when available, request, reply, and timestamp for up to 24 hours. Ordinary group messages and attachment bytes are not retained. Relevant recent history is sent with a bounded context to Apps Script; this memory is shared across participants.
+
 `npm start` expects an externally supplied environment. To load local `.env` explicitly:
 
 ```sh

@@ -117,6 +117,21 @@ test('ambiguous course aliases cannot fabricate a subject match', () => {
   assert.equal(ctx.NF_materia_('Sample course'), '');
 });
 
+test('publication listing follows every Classroom page', () => {
+  const { ctx } = setup();
+  const calls = [];
+  ctx.Classroom = { Courses: { CourseWork: { list: (courseId, options) => {
+    calls.push({ courseId, token: options.pageToken || '' });
+    return options.pageToken
+      ? { courseWork: [{ id: 'second' }] }
+      : { courseWork: [{ id: 'first' }], nextPageToken: 'page-2' };
+  } } } };
+  ctx.NF_comprobarTiempo_ = () => {};
+  const publications = ctx.NF_publicaciones_('example-course', 'Tarea', Date.now() + 10000);
+  assert.deepEqual(Array.from(publications, post => post.id), ['first', 'second']);
+  assert.deepEqual(calls, [{ courseId: 'example-course', token: '' }, { courseId: 'example-course', token: 'page-2' }]);
+});
+
 test('installer creates the configured interval and records history without delivery', () => {
   const { ctx } = setup({ POLL_INTERVAL_MINUTES: '30' });
   const state = {};
