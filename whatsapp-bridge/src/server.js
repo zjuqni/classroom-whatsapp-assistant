@@ -6,6 +6,7 @@ const qrcode = require('qrcode-terminal');
 const QRCodeGenerator = require('qrcode-terminal/vendor/QRCode');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const { createMentionBot, jid } = require('./mention-bot');
+const { splitWhatsAppText } = require('./whatsapp-format');
 
 const PORT = Number(process.env.PORT || 3018);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -27,7 +28,7 @@ let stateWriteQueue = Promise.resolve();
 const ownMentionIds = new Set();
 const senderAliases = new Map();
 let mentionBot;
-let state = { sent: {}, partial: {}, bot: { handled: {}, userWindows: {} } };
+let state = { sent: {}, partial: {}, bot: { handled: {}, userWindows: {}, groupHistory: [] } };
 
 async function loadState() {
   await fs.mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
@@ -35,9 +36,14 @@ async function loadState() {
     state = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
     if (!state || typeof state.sent !== 'object' || !state.sent) state = { sent: {}, partial: {} };
     if (!state.partial || typeof state.partial !== 'object') state.partial = {};
-    if (!state.bot || typeof state.bot !== 'object') state.bot = { handled: {}, userWindows: {} };
+    if (!state.bot || typeof state.bot !== 'object') state.bot = { handled: {}, userWindows: {}, groupHistory: [] };
     if (!state.bot.handled || typeof state.bot.handled !== 'object') state.bot.handled = {};
     if (!state.bot.userWindows || typeof state.bot.userWindows !== 'object') state.bot.userWindows = {};
+    if (!Array.isArray(state.bot.groupHistory)) state.bot.groupHistory = [];
+    state.bot.groupHistory = state.bot.groupHistory.filter(item => item && Number(item.at) > Date.now() - 24 * 60 * 60 * 1000)
+      .map(item => ({ at: Number(item.at), senderId: String(item.senderId || '').slice(0, 160), senderName: String(item.senderName || '').slice(0, 80), question: String(item.question || '').slice(0, 4000), answer: String(item.answer || '').slice(0, 9000), ok: item.ok !== false }));
+    state.bot.groupHistory.sort((a, b) => a.at - b.at);
+    await saveState();
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
     await saveState();
@@ -55,10 +61,12 @@ async function saveState() {
       else delete state.bot.userWindows[sender];
     }
   }
-  const snapshot = JSON.stringify(state);
   const current = stateWriteQueue.then(async () => {
     const tmp = `${STATE_FILE}.tmp`;
-    await fs.writeFile(tmp, snapshot, { mode: 0o600 });
+    if (state.bot && Array.isArray(state.bot.groupHistory)) {
+      state.bot.groupHistory = state.bot.groupHistory.filter(item => Number(item.at) > Date.now() - 24 * 60 * 60 * 1000);
+    }
+    await fs.writeFile(tmp, JSON.stringify(state), { mode: 0o600 });
     await fs.rename(tmp, STATE_FILE);
   });
   stateWriteQueue = current.catch(() => {});
@@ -80,25 +88,6 @@ function requireToken(req, res, next) {
 
 function safeFilename(value) {
   return String(value || 'file').replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 180) || 'file';
-}
-
-function splitReply(text, maxLength) {
-  const chunks = [];
-  let current = '';
-  for (const paragraph of String(text).split('\n')) {
-    const lines = paragraph.length <= maxLength
-      ? [paragraph]
-      : paragraph.match(new RegExp('.{1,' + maxLength + '}', 'g')) || [''];
-    for (const line of lines) {
-      const candidate = current ? current + '\n' + line : line;
-      if (candidate.length > maxLength && current) {
-        chunks.push(current);
-        current = line;
-      } else current = candidate;
-    }
-  }
-  if (current || !chunks.length) chunks.push(current);
-  return chunks;
 }
 
 async function getTargetGroup() {
@@ -198,11 +187,27 @@ async function resolveSender(senderId) {
   return resolved;
 }
 
-async function askClassroom(question, messageId) {
+function displayNameFor(message, contact) {
+  const candidates = [message && message._data && (message._data.notifyName || message._data.pushName), contact && contact.pushname];
+  for (const value of candidates) {
+    const name = String(value || '').replace(/[\r\n\u0000-\u001f]/g, ' ').trim().slice(0, 80);
+    if (name && !/^\+?[\d\s().-]+$/.test(name) && !name.includes('@')) return name;
+  }
+  return '';
+}
+
+async function resolveSenderName(message, senderId) {
+  let contact;
+  try { contact = await client.getContactById(senderId); } catch (_) {}
+  return displayNameFor(message, contact);
+}
+
+async function askClassroom(question, messageId, context = {}) {
   const response = await fetch(CLASSROOM_BOT_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token: TOKEN, question, messageId, groupId: GROUP_ID }),
+    body: JSON.stringify({ token: TOKEN, question, messageId, groupId: GROUP_ID,
+      senderId: context.senderId || '', senderName: context.senderName || '', history: Array.isArray(context.history) ? context.history : [] }),
     signal: AbortSignal.timeout(260000),
     redirect: 'follow'
   });
@@ -279,9 +284,10 @@ async function start() {
     getState: () => state.bot,
     saveState,
     resolveSender,
+    resolveSenderName,
     ask: askClassroom,
     sendReply: (message, answer) => {
-      const chunks = splitReply(answer, 3000);
+      const chunks = splitWhatsAppText(answer, 3000);
       const current = sendQueue.then(async () => {
         await message.reply(chunks[0], GROUP_ID, { linkPreview: false, ignoreQuoteErrors: true });
         for (const chunk of chunks.slice(1)) await client.sendMessage(GROUP_ID, chunk, { linkPreview: false });

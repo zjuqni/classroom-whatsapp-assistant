@@ -21,8 +21,9 @@ This repository is a **deployment template**. It contains no real account, schoo
 - New-publication notices with original descriptions, summaries, key points, weekdays, deadlines, verified links, and supported Drive attachments.
 - Approximate 24-hour and 12-hour reminders for deadlines recorded from new publications.
 - Text-derived dates and optional next-class inference using your own weekly schedule.
-- Mention replies filtering publications by course, teacher, date, or keywords.
+- Mention replies searching every available publication page and filtering by course, teacher, official or description dates, or keywords (up to 25 results).
 - Study explanations using supported attachment content when available.
+- WhatsApp-native formatting, visible sender names when available, and a shared 24-hour memory of requests addressed to the bot.
 - Persistent event tracking, serialized delivery, and a per-participant rolling request quota.
 
 The assistant does not post in Classroom, submit assignments, modify files, or read grades/student submissions. Gmail is not used.
@@ -121,6 +122,10 @@ Follow the [bridge setup guide](whatsapp-bridge/README.md): install dependencies
 
 Every participant has the same `WA_MESSAGES_PER_HOUR` quota (default `10`), including the owner. It counts admitted requests in a rolling hour, including failed queries. A long answer may become multiple WhatsApp messages. Replies show usage; excess requests are ignored until capacity returns. No display name or account bypasses the limit.
 
+### Mention memory
+
+The bridge keeps one shared history for the configured group. It stores only direct requests to the bot and the replies it sends, with timestamp, sender ID, and visible display name when WhatsApp provides one. Entries expire after 24 hours. Ordinary group messages and attachment bytes are not stored. For a new query, the bridge supplies recent turns and older turns that appear relevant, within a bounded context size. This memory is shared by the whole group, not separated by participant.
+
 ## Dates, files, and delivery
 
 - Classroom's structured due date/time is UTC and is converted to `APP_TIMEZONE`. Text dates use timezone-aware local parsing, not a fixed offset. See the [Classroom reference](https://developers.google.com/workspace/classroom/reference/rest/v1/courses.courseWork) and [Apps Script date utilities](https://developers.google.com/apps-script/reference/utilities/utilities).
@@ -137,7 +142,7 @@ Store deployment values only in Script Properties and a private environment file
 
 `.gitignore` excludes common credentials/session files plus `apps-script/script-properties.json` and `*.local.json`. It cannot detect secrets pasted into normal source: review changes before pushing.
 
-Descriptions, questions, and selected attachment contents go to your configured Vertex project. The bridge saves event IDs, mention IDs, quota identifiers, and WhatsApp authentication state in its private data directory. Protect logs, group lookup results, and backups. Forward course content only to recipients allowed to access it.
+Descriptions, questions, selected attachment contents, and the relevant bot-request history go to your configured Vertex project. The bridge saves event IDs, mention IDs, quota identifiers, the shared bot-request history (24-hour expiry), and WhatsApp authentication state in its private data directory. Protect logs, group lookup results, and backups. Forward course content only to recipients allowed to access it.
 
 ## WhatsApp limitations
 

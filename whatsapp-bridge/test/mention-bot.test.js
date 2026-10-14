@@ -1,24 +1,26 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { createMentionBot } = require('../src/mention-bot');
+const { createMentionBot, relevantHistory, MEMORY_TTL_MS } = require('../src/mention-bot');
 
 function setup(existing, messagesPerHour = 10) {
   let clock = 1800000000000;
-  const state = existing || { handled: {}, userWindows: {} };
+  const state = existing || { handled: {}, userWindows: {}, groupHistory: [] };
   const replies = [];
   const questions = [];
+  const contexts = [];
   let persistCount = 0;
   const bot = createMentionBot({
     messagesPerHour,
     groupId: 'class@g.us', ownIds: () => new Set(['bot@c.us', 'bot@lid']),
     getState: () => state, saveState: async () => { persistCount++; },
     resolveSender: async sender => sender === 'student@lid' ? 'student@c.us' : sender,
-    ask: async question => { questions.push(question); return 'Answer'; },
+    resolveSenderName: async message => message._data && message._data.notifyName || '',
+    ask: async (question, _id, context) => { questions.push(question); contexts.push(context); return 'Answer'; },
     sendReply: async (message, text) => { replies.push({ id: message.id._serialized, text }); },
     now: () => clock, logger: { error() {} }
   });
-  return { bot, state, replies, questions, get persistCount() { return persistCount; }, advance(ms) { clock += ms; },
+  return { bot, state, replies, questions, contexts, get persistCount() { return persistCount; }, advance(ms) { clock += ms; },
     message(id, author = 'student@c.us', overrides = {}) { return { from: 'class@g.us', author, id: { _serialized: id }, body: '@bot What assignments are there?', mentionedIds: ['bot@c.us'], timestamp: clock / 1000, fromMe: false, ...overrides }; } };
 }
 
@@ -85,4 +87,25 @@ test('custom quotas appear in the footer and apply to every user', async () => {
   await s.bot(s.message('other-two', 'owner@c.us'));
   await s.bot(s.message('other-three', 'owner@c.us'));
   assert.equal(s.replies.length, 4);
+});
+
+test('requests from different senders share bot-only history for 24 hours', async () => {
+  const s = setup();
+  await s.bot(s.message('first', 'student@c.us', { _data: { notifyName: 'Ana' } }));
+  await s.bot(s.message('second', 'other@c.us', { _data: { notifyName: 'Luis' } }));
+  assert.equal(s.state.groupHistory.length, 2);
+  assert.equal(s.state.groupHistory[0].senderName, 'Ana');
+  assert.equal(s.state.groupHistory[1].senderId, 'other@c.us');
+  assert.equal(s.contexts[1].history[0].senderName, 'Ana');
+  assert.equal(s.contexts[1].history[0].question, 'What assignments are there?');
+});
+
+test('shared history ranks relevant requests and ignores expired records', () => {
+  const now = 1800000000000;
+  const history = Array.from({ length: 8 }, (_, i) => ({ at: now - i * 1000, question: `general question ${i}`, answer: 'answer' }));
+  history[0] = { at: now - 1000, senderName: 'Ana', question: 'physics energy assignment', answer: 'Calculate kinetic energy.' };
+  history.push({ at: now - MEMORY_TTL_MS - 1, question: 'physics energy', answer: 'expired' });
+  const found = relevantHistory(history, 'continue with the physics energy assignment', now);
+  assert.ok(found.some(item => item.senderName === 'Ana'));
+  assert.ok(found.every(item => item.answer !== 'expired'));
 });
